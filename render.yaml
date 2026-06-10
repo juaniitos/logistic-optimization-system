@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: logistic-optimization-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python init_render_db.py
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: logistic-optimization-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SQL_ECHO
+        value: false
+
+  - type: web
+    name: logistic-optimization-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://logistic-optimization-api.onrender.com/api
+    routes:
+      - type: rewrite
+        source: "/*"
+        destination: /index.html
+
+databases:
+  - name: logistic-optimization-db
+    plan: free

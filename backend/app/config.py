@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./logistic.db"
     # Para producción con PostgreSQL (requiere Docker o instalación local):
     # DATABASE_URL: str = "postgresql+psycopg://logistic_user:logistic_pass@localhost:5432/logistic_db"
+    SQL_ECHO: bool = False
     
     # Redis Cache
     REDIS_HOST: str = "localhost"
@@ -29,7 +30,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
     # CORS
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173"]
+    BACKEND_CORS_ORIGINS: list = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+    ]
     
     # ML Models
     MODEL_PATH: str = "./data/models"

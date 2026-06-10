@@ -6,11 +6,19 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.config import settings
 
+def normalize_database_url(database_url: str) -> str:
+    """Use the installed psycopg v3 driver for PostgreSQL URLs."""
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return database_url
+
 # Create database engine
 engine = create_engine(
-    settings.DATABASE_URL,
+    normalize_database_url(settings.DATABASE_URL),
     pool_pre_ping=True,
-    echo=True  # Set to False in production
+    echo=settings.SQL_ECHO
 )
 
 # Create session factory
