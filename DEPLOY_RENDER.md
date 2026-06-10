@@ -36,7 +36,7 @@ Si Render cambia el subdominio del backend, actualiza la variable `VITE_API_URL`
 
 ## 4. Cargar Datos Iniciales
 
-El archivo `render.yaml` ejecuta automaticamente:
+El archivo `render.yaml` ejecuta automaticamente al iniciar el backend:
 
 ```bash
 python init_render_db.py
