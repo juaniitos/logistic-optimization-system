@@ -229,11 +229,13 @@ async def create_route_assignment(
             detail="Esta ruta ya tiene una asignación activa"
         )
     
-    db_assignment = RouteAssignment(**assignment.model_dump())
+    assignment_data = assignment.model_dump()
+    if not assignment_data.get("vehicle_id") and driver.assigned_vehicle_id:
+        assignment_data["vehicle_id"] = driver.assigned_vehicle_id
+
+    db_assignment = RouteAssignment(**assignment_data)
     db.add(db_assignment)
-    
-    # Actualizar estado del transportista
-    driver.status = "on_route"
+    route.status = "planned"
     
     db.commit()
     db.refresh(db_assignment)
@@ -299,12 +301,23 @@ async def update_assignment_status(
     # Actualizar timestamps según el estado
     if new_status == "in_progress":
         assignment.started_at = datetime.utcnow()
+        driver = db.query(Driver).filter(Driver.id == assignment.driver_id).first()
+        route = db.query(Route).filter(Route.id == assignment.route_id).first()
+        if driver:
+            driver.status = "on_route"
+        if route:
+            route.status = "in_progress"
     elif new_status in ["completed", "cancelled"]:
         assignment.completed_at = datetime.utcnow()
         # Liberar al transportista
         driver = db.query(Driver).filter(Driver.id == assignment.driver_id).first()
+        route = db.query(Route).filter(Route.id == assignment.route_id).first()
         if driver:
             driver.status = "available"
+        if route:
+            route.status = "completed" if new_status == "completed" else "planned"
+            if new_status == "completed":
+                route.completed_at = datetime.utcnow()
     
     db.commit()
     db.refresh(assignment)
@@ -347,5 +360,4 @@ async def get_driver_assignments(
     
     assignments = query.all()
     return assignments
-
 
