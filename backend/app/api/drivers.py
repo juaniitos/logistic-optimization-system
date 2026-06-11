@@ -72,18 +72,6 @@ async def get_drivers(
     return drivers
 
 
-@router.get("/{driver_id}", response_model=DriverResponse)
-async def get_driver(
-    driver_id: int,
-    db: Session = Depends(get_db)
-):
-    """Obtener un transportista por ID"""
-    driver = db.query(Driver).filter(Driver.id == driver_id).first()
-    if not driver:
-        raise HTTPException(status_code=404, detail="Transportista no encontrado")
-    return driver
-
-
 @router.put("/{driver_id}", response_model=DriverResponse)
 async def update_driver(
     driver_id: int,
@@ -346,6 +334,18 @@ async def delete_assignment(
     return None
 
 
+@router.get("/{driver_id}", response_model=DriverResponse)
+async def get_driver(
+    driver_id: int,
+    db: Session = Depends(get_db)
+):
+    """Obtener un transportista por ID"""
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Transportista no encontrado")
+    return driver
+
+
 @router.get("/{driver_id}/assignments", response_model=List[RouteAssignmentResponse])
 async def get_driver_assignments(
     driver_id: int,
@@ -360,4 +360,3 @@ async def get_driver_assignments(
     
     assignments = query.all()
     return assignments
-
