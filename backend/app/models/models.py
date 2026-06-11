@@ -123,6 +123,7 @@ class InventoryItem(Base):
     min_stock = Column(Integer, default=10)
     max_stock = Column(Integer, default=1000)
     reorder_point = Column(Integer, default=20)
+    is_active = Column(Boolean, default=True)
     last_restock_date = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -196,6 +197,9 @@ class RouteAssignment(Base):
     route_id = Column(Integer, ForeignKey("routes.id"), nullable=False)
     driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False)
     vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=True)
+    inventory_item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=True)
+    inventory_quantity = Column(Integer, nullable=True)
+    inventory_dispatched = Column(Boolean, default=False)
     
     # Estado de la asignación
     status = Column(String(50), default="assigned")  # assigned, in_progress, completed, cancelled
@@ -212,3 +216,4 @@ class RouteAssignment(Base):
     route = relationship("Route", back_populates="assignments")
     driver = relationship("Driver", back_populates="route_assignments")
     vehicle = relationship("Vehicle")
+    inventory_item = relationship("InventoryItem")

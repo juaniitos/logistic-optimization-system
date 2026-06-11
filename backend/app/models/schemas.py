@@ -91,6 +91,8 @@ class RouteAssignmentBase(BaseModel):
     route_id: int
     driver_id: int
     vehicle_id: Optional[int] = None
+    inventory_item_id: Optional[int] = None
+    inventory_quantity: Optional[int] = None
     notes: Optional[str] = None
 
 
@@ -106,6 +108,7 @@ class RouteAssignmentUpdate(BaseModel):
 class RouteAssignmentResponse(RouteAssignmentBase):
     id: int
     status: str
+    inventory_dispatched: bool = False
     assigned_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -145,10 +148,21 @@ class InventoryItemBase(BaseModel):
     min_stock: int = 10
     max_stock: int = 1000
     reorder_point: int = 20
+    is_active: bool = True
 
 
 class InventoryItemCreate(InventoryItemBase):
     pass
+
+
+class InventoryItemUpdate(BaseModel):
+    warehouse_id: Optional[int] = None
+    product_id: Optional[int] = None
+    quantity: Optional[int] = None
+    min_stock: Optional[int] = None
+    max_stock: Optional[int] = None
+    reorder_point: Optional[int] = None
+    is_active: Optional[bool] = None
 
 
 class InventoryItemResponse(InventoryItemBase):

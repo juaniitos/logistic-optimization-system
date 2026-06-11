@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react'
 import {
-  Card, Table, Button, Space, Tag, Modal, Form, Select,
+  Card, Table, Button, Space, Tag, Modal, Form, Select, InputNumber,
   message, Popconfirm, Row, Col, Statistic, Input, Tooltip, Divider,
   Timeline, Empty, Alert
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, CarOutlined, UserOutlined,
   CheckCircleOutlined, ClockCircleOutlined, PlayCircleOutlined,
-  StopOutlined, ReloadOutlined, SearchOutlined, EnvironmentOutlined
+  StopOutlined, ReloadOutlined, SearchOutlined, EnvironmentOutlined,
+  ThunderboltOutlined, BarChartOutlined
 } from '@ant-design/icons'
 import {
   getDrivers, getRoutes, getRouteAssignments, createRouteAssignment,
-  updateAssignmentStatus, deleteRouteAssignment
+  updateAssignmentStatus, deleteRouteAssignment, getInventoryItems,
+  getProducts, getWarehouses, createRoute, optimizeSavedRoute
 } from '../services/api'
 import dayjs from 'dayjs'
 
@@ -22,10 +24,19 @@ function RouteAssignments() {
   const [assignments, setAssignments] = useState([])
   const [drivers, setDrivers] = useState([])
   const [routes, setRoutes] = useState([])
+  const [inventoryItems, setInventoryItems] = useState([])
+  const [products, setProducts] = useState([])
+  const [warehouses, setWarehouses] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
+  const [optimizationModalVisible, setOptimizationModalVisible] = useState(false)
+  const [selectedOptimizationRoute, setSelectedOptimizationRoute] = useState(null)
   const [statusFilter, setStatusFilter] = useState(null)
+  const [optimizingRouteId, setOptimizingRouteId] = useState(null)
   const [form] = Form.useForm()
+  const selectedInventoryItemId = Form.useWatch('inventory_item_id', form)
+  const selectedOriginWarehouseId = Form.useWatch('origin_warehouse_id', form)
+  const selectedRouteMode = Form.useWatch('route_mode', form)
 
   useEffect(() => {
     loadData()
@@ -34,14 +45,20 @@ function RouteAssignments() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [assignmentsData, driversData, routesData] = await Promise.all([
+      const [assignmentsData, driversData, routesData, inventoryData, productsData, warehousesData] = await Promise.all([
         getRouteAssignments(statusFilter ? { status: statusFilter } : {}),
         getDrivers(),
-        getRoutes()
+        getRoutes(),
+        getInventoryItems(),
+        getProducts(),
+        getWarehouses()
       ])
       setAssignments(assignmentsData)
       setDrivers(driversData)
       setRoutes(routesData)
+      setInventoryItems(inventoryData)
+      setProducts(productsData)
+      setWarehouses(warehousesData)
     } catch (error) {
       console.error('Error loading data:', error)
       message.error('Error al cargar datos')
@@ -52,12 +69,39 @@ function RouteAssignments() {
 
   const handleCreate = () => {
     form.resetFields()
+    form.setFieldsValue({
+      route_mode: 'new',
+      use_road_routing: true
+    })
     setModalVisible(true)
   }
 
   const handleSubmit = async (values) => {
     try {
-      await createRouteAssignment(values)
+      const payload = { ...values }
+      if (payload.route_mode === 'new') {
+        const route = await createRoute({
+          origin_warehouse_id: payload.origin_warehouse_id,
+          destination_warehouse_ids: payload.destination_warehouse_ids,
+          route_name: payload.route_name,
+          use_road_routing: payload.use_road_routing !== false
+        })
+        payload.route_id = route.id
+      }
+
+      if (!payload.inventory_item_id) {
+        delete payload.inventory_item_id
+        delete payload.inventory_quantity
+      } else {
+        payload.inventory_quantity = Number(payload.inventory_quantity)
+      }
+      delete payload.route_mode
+      delete payload.origin_warehouse_id
+      delete payload.destination_warehouse_ids
+      delete payload.route_name
+      delete payload.use_road_routing
+
+      await createRouteAssignment(payload)
       message.success('Ruta asignada correctamente')
       setModalVisible(false)
       loadData()
@@ -77,7 +121,24 @@ function RouteAssignments() {
       message.success(messages[newStatus] || 'Estado actualizado')
       loadData()
     } catch (error) {
-      message.error('Error al actualizar estado')
+      message.error(error.response?.data?.detail || 'Error al actualizar estado')
+    }
+  }
+
+  const handleOptimizeRoute = async (record) => {
+    setOptimizingRouteId(record.route_id)
+    try {
+      const result = await optimizeSavedRoute(record.route_id)
+      const saved = result.optimization?.distance_saved_km || 0
+      message.success(saved > 0
+        ? `Ruta optimizada: ${saved.toFixed(2)} km ahorrados`
+        : 'Ruta optimizada correctamente'
+      )
+      loadData()
+    } catch (error) {
+      message.error(error.response?.data?.detail || 'Error al optimizar ruta')
+    } finally {
+      setOptimizingRouteId(null)
     }
   }
 
@@ -124,6 +185,54 @@ function RouteAssignments() {
     return route ? (route.route_name || `Ruta #${routeId}`) : `Ruta #${routeId}`
   }
 
+  const getRouteStops = (routeId) => {
+    const route = routes.find(r => r.id === routeId)
+    if (!route?.route_data) return null
+
+    try {
+      const routeData = JSON.parse(route.route_data)
+      return routeData.ordered_stop_names?.join(' -> ') || null
+    } catch {
+      return null
+    }
+  }
+
+  const getRouteData = (routeId) => {
+    const route = routes.find(r => r.id === routeId)
+    if (!route?.route_data) return null
+
+    try {
+      return JSON.parse(route.route_data)
+    } catch {
+      return null
+    }
+  }
+
+  const getRouteOptimizationStatus = (routeId) => {
+    const routeData = getRouteData(routeId)
+    return routeData?.optimized_at ? routeData.optimization_summary : null
+  }
+
+  const handleShowOptimization = (routeId) => {
+    const route = routes.find(r => r.id === routeId)
+    const routeData = getRouteData(routeId)
+    setSelectedOptimizationRoute({ route, routeData })
+    setOptimizationModalVisible(true)
+  }
+
+  const getProduct = (productId) => products.find(product => product.id === productId)
+  const getWarehouse = (warehouseId) => warehouses.find(warehouse => warehouse.id === warehouseId)
+  const getInventoryItem = (inventoryItemId) => inventoryItems.find(item => item.id === inventoryItemId)
+
+  const getInventoryLabel = (inventoryItemId) => {
+    const item = getInventoryItem(inventoryItemId)
+    if (!item) return 'Sin inventario'
+
+    const product = getProduct(item.product_id)
+    const warehouse = getWarehouse(item.warehouse_id)
+    return `${product?.name || `Producto #${item.product_id}`} - ${warehouse?.name || `Bodega #${item.warehouse_id}`}`
+  }
+
   const columns = [
     {
       title: 'ID',
@@ -146,12 +255,28 @@ function RouteAssignments() {
       title: 'Ruta',
       dataIndex: 'route_id',
       key: 'route_id',
-      render: (routeId) => (
-        <Space>
+      render: (routeId) => {
+        const optimization = getRouteOptimizationStatus(routeId)
+        return (
+        <Space direction="vertical" size={0}>
+          <Space>
           <EnvironmentOutlined style={{ color: '#52c41a' }} />
           {getRouteName(routeId)}
+          {optimization && (
+            <Tag color="green">Optimizada</Tag>
+          )}
+          </Space>
+          {getRouteStops(routeId) && (
+            <small style={{ color: '#888' }}>{getRouteStops(routeId)}</small>
+          )}
+          {optimization && (
+            <small style={{ color: '#52c41a' }}>
+              Ahorro: {Number(optimization.distance_saved_km || 0).toFixed(2)} km
+            </small>
+          )}
         </Space>
-      )
+        )
+      }
     },
     {
       title: 'Estado',
@@ -165,6 +290,21 @@ function RouteAssignments() {
         { text: 'Cancelada', value: 'cancelled' }
       ],
       onFilter: (value, record) => record.status === value
+    },
+    {
+      title: 'Carga',
+      key: 'inventory',
+      render: (_, record) => record.inventory_item_id ? (
+        <Space direction="vertical" size={0}>
+          <span>{getInventoryLabel(record.inventory_item_id)}</span>
+          <small style={{ color: '#888' }}>
+            {record.inventory_quantity || 0} unidades
+            {record.inventory_dispatched ? ' despachadas' : ' asignadas'}
+          </small>
+        </Space>
+      ) : (
+        <Tag>Sin carga</Tag>
+      )
     },
     {
       title: 'Asignada',
@@ -191,13 +331,32 @@ function RouteAssignments() {
       render: (_, record) => (
         <Space wrap>
           {record.status === 'assigned' && (
+            <>
+              <Button
+                size="small"
+                icon={<ThunderboltOutlined />}
+                loading={optimizingRouteId === record.route_id}
+                onClick={() => handleOptimizeRoute(record)}
+              >
+                Optimizar
+              </Button>
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                onClick={() => handleStatusChange(record.id, 'in_progress')}
+              >
+                Iniciar
+              </Button>
+            </>
+          )}
+          {getRouteOptimizationStatus(record.route_id) && (
             <Button
-              type="primary"
               size="small"
-              icon={<PlayCircleOutlined />}
-              onClick={() => handleStatusChange(record.id, 'in_progress')}
+              icon={<BarChartOutlined />}
+              onClick={() => handleShowOptimization(record.route_id)}
             >
-              Iniciar
+              Ver optimización
             </Button>
           )}
           {record.status === 'in_progress' && (
@@ -253,6 +412,18 @@ function RouteAssignments() {
       .map(a => a.route_id)
     return routes.filter(r => !assignedRouteIds.includes(r.id))
   }
+
+  const getDestinationOptions = () => (
+    warehouses.filter(warehouse => warehouse.id !== selectedOriginWarehouseId)
+  )
+
+  const getAvailableInventoryItems = () => (
+    inventoryItems.filter(item => item.is_active !== false && item.quantity > 0)
+  )
+
+  const selectedInventoryItem = selectedInventoryItemId
+    ? getInventoryItem(selectedInventoryItemId)
+    : null
 
   return (
     <div>
@@ -403,7 +574,7 @@ function RouteAssignments() {
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
-        width={500}
+        width={680}
       >
         <Form
           form={form}
@@ -432,28 +603,166 @@ function RouteAssignments() {
             </Select>
           </Form.Item>
 
+          <Divider orientation="left">Ruta y destinos</Divider>
+
           <Form.Item
-            name="route_id"
-            label="Ruta"
-            rules={[{ required: true, message: 'Seleccione una ruta' }]}
+            name="route_mode"
+            label="Tipo de ruta"
+            rules={[{ required: true, message: 'Seleccione el tipo de ruta' }]}
+          >
+            <Select>
+              <Option value="new">Nueva ruta con varios destinos</Option>
+              <Option value="existing">Ruta guardada</Option>
+            </Select>
+          </Form.Item>
+
+          {selectedRouteMode === 'existing' ? (
+            <Form.Item
+              name="route_id"
+              label="Ruta"
+              rules={[{ required: true, message: 'Seleccione una ruta' }]}
+            >
+              <Select
+                placeholder="Seleccione una ruta"
+                showSearch
+                optionFilterProp="label"
+              >
+                {getAvailableRoutes().map(route => (
+                  <Option
+                    key={route.id}
+                    value={route.id}
+                    label={route.route_name || `Ruta #${route.id}`}
+                  >
+                    <Space direction="vertical" size={0}>
+                      <Space>
+                        <EnvironmentOutlined />
+                        {route.route_name || `Ruta #${route.id}`}
+                        {route.total_distance && (
+                          <Tag size="small">{route.total_distance.toFixed(1)} km</Tag>
+                        )}
+                      </Space>
+                      {getRouteStops(route.id) && (
+                        <small style={{ color: '#888' }}>{getRouteStops(route.id)}</small>
+                      )}
+                    </Space>
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          ) : (
+            <>
+              <Form.Item
+                name="route_name"
+                label="Nombre de la ruta (opcional)"
+              >
+                <Input placeholder="Ej. Ruta Península Norte" />
+              </Form.Item>
+
+              <Form.Item
+                name="origin_warehouse_id"
+                label="Origen"
+                rules={[{ required: true, message: 'Seleccione el punto de origen' }]}
+              >
+                <Select
+                  placeholder="Seleccione origen"
+                  showSearch
+                  optionFilterProp="label"
+                  onChange={() => form.setFieldValue('destination_warehouse_ids', [])}
+                >
+                  {warehouses.map(warehouse => (
+                    <Option key={warehouse.id} value={warehouse.id} label={warehouse.name}>
+                      {warehouse.name}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+
+              <Form.Item
+                name="destination_warehouse_ids"
+                label="Destinos"
+                rules={[{ required: true, message: 'Seleccione uno o más destinos' }]}
+              >
+                <Select
+                  mode="multiple"
+                  placeholder="Seleccione destinos"
+                  showSearch
+                  optionFilterProp="label"
+                  disabled={!selectedOriginWarehouseId}
+                >
+                  {getDestinationOptions().map(warehouse => (
+                    <Option key={warehouse.id} value={warehouse.id} label={warehouse.name}>
+                      {warehouse.name}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+
+              <Form.Item
+                name="use_road_routing"
+                label="Tipo de cálculo"
+              >
+                <Select>
+                  <Option value={true}>Rutas por carretera</Option>
+                  <Option value={false}>Distancia directa</Option>
+                </Select>
+              </Form.Item>
+            </>
+          )}
+
+          <Divider orientation="left">Inventario a despachar</Divider>
+
+          <Form.Item
+            name="inventory_item_id"
+            label="Inventario"
           >
             <Select
-              placeholder="Seleccione una ruta"
+              placeholder="Seleccione inventario"
+              allowClear
               showSearch
-              optionFilterProp="children"
+              optionFilterProp="label"
+              onChange={() => form.setFieldValue('inventory_quantity', null)}
             >
-              {getAvailableRoutes().map(route => (
-                <Option key={route.id} value={route.id}>
-                  <Space>
-                    <EnvironmentOutlined />
-                    {route.route_name || `Ruta #${route.id}`}
-                    {route.total_distance && (
-                      <Tag size="small">{route.total_distance.toFixed(1)} km</Tag>
-                    )}
-                  </Space>
-                </Option>
-              ))}
+              {getAvailableInventoryItems().map(item => {
+                const label = getInventoryLabel(item.id)
+                return (
+                  <Option key={item.id} value={item.id} label={label}>
+                    <Space direction="vertical" size={0}>
+                      <span>{label}</span>
+                      <small style={{ color: '#888' }}>Disponible: {item.quantity} unidades</small>
+                    </Space>
+                  </Option>
+                )
+              })}
             </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="inventory_quantity"
+            label="Cantidad"
+            dependencies={['inventory_item_id']}
+            rules={[
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  const inventoryItemId = getFieldValue('inventory_item_id')
+                  if (!inventoryItemId) return Promise.resolve()
+                  if (!value || value <= 0) {
+                    return Promise.reject(new Error('Ingrese la cantidad a despachar'))
+                  }
+                  const item = getInventoryItem(inventoryItemId)
+                  if (item && value > item.quantity) {
+                    return Promise.reject(new Error('La cantidad supera el inventario disponible'))
+                  }
+                  return Promise.resolve()
+                }
+              })
+            ]}
+          >
+            <InputNumber
+              min={1}
+              max={selectedInventoryItem?.quantity}
+              disabled={!selectedInventoryItem}
+              style={{ width: '100%' }}
+            />
           </Form.Item>
 
           <Form.Item
@@ -477,6 +786,107 @@ function RouteAssignments() {
             </Space>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="Detalle de Optimización"
+        open={optimizationModalVisible}
+        onCancel={() => setOptimizationModalVisible(false)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setOptimizationModalVisible(false)}>
+            Cerrar
+          </Button>
+        ]}
+        width={760}
+      >
+        {selectedOptimizationRoute?.routeData?.optimization_summary ? (
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Card size="small">
+              <Space direction="vertical" size={4}>
+                <strong>{selectedOptimizationRoute.route?.route_name || 'Ruta optimizada'}</strong>
+                <span style={{ color: '#888' }}>
+                  Método: {selectedOptimizationRoute.routeData.optimization_method || 'optimización de paradas'}
+                </span>
+                <span style={{ color: '#888' }}>
+                  Fecha: {selectedOptimizationRoute.routeData.optimized_at
+                    ? dayjs(selectedOptimizationRoute.routeData.optimized_at).format('DD/MM/YYYY HH:mm')
+                    : '-'}
+                </span>
+              </Space>
+            </Card>
+
+            <Row gutter={[16, 16]}>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Distancia original"
+                    value={selectedOptimizationRoute.routeData.optimization_summary.original_distance_km || 0}
+                    suffix="km"
+                    precision={2}
+                  />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Distancia optimizada"
+                    value={selectedOptimizationRoute.routeData.optimization_summary.optimized_distance_km || 0}
+                    suffix="km"
+                    precision={2}
+                    valueStyle={{ color: '#1890ff' }}
+                  />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Ahorro"
+                    value={selectedOptimizationRoute.routeData.optimization_summary.distance_saved_km || 0}
+                    suffix="km"
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Mejora"
+                    value={selectedOptimizationRoute.routeData.optimization_summary.distance_saved_percent || 0}
+                    suffix="%"
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                </Card>
+              </Col>
+            </Row>
+
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={12}>
+                <Card size="small" title="Orden original">
+                  <Timeline
+                    items={(selectedOptimizationRoute.routeData.original_ordered_stop_names || []).map((name, index) => ({
+                      color: index === 0 ? 'green' : 'blue',
+                      children: `${index + 1}. ${name}`
+                    }))}
+                  />
+                </Card>
+              </Col>
+              <Col xs={24} md={12}>
+                <Card size="small" title="Orden optimizado">
+                  <Timeline
+                    items={(selectedOptimizationRoute.routeData.ordered_stop_names || []).map((name, index) => ({
+                      color: index === 0 ? 'green' : 'blue',
+                      children: `${index + 1}. ${name}`
+                    }))}
+                  />
+                </Card>
+              </Col>
+            </Row>
+          </Space>
+        ) : (
+          <Empty description="Esta ruta todavía no tiene datos de optimización" />
+        )}
       </Modal>
     </div>
   )

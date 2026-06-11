@@ -7,6 +7,7 @@ from typing import List, Optional
 from app.models.database import get_db
 from app.models.schemas import (
     InventoryItemCreate,
+    InventoryItemUpdate,
     InventoryItemResponse,
     ProductCreate,
     ProductResponse,
@@ -146,9 +147,18 @@ async def get_products(
 @router.post("/items", response_model=InventoryItemResponse, status_code=status.HTTP_201_CREATED)
 async def create_inventory_item(
     item: InventoryItemCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new inventory item"""
+    warehouse = db.query(Warehouse).filter(Warehouse.id == item.warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Bodega no encontrada")
+
+    product = db.query(Product).filter(Product.id == item.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
     db_item = InventoryItem(**item.model_dump())
     db.add(db_item)
     db.commit()
@@ -161,6 +171,7 @@ async def get_inventory_items(
     warehouse_id: int = None,
     product_id: int = None,
     low_stock: bool = False,
+    include_inactive: bool = False,
     db: Session = Depends(get_db)
 ):
     """
@@ -178,9 +189,59 @@ async def get_inventory_items(
         query = query.filter(InventoryItem.product_id == product_id)
     if low_stock:
         query = query.filter(InventoryItem.quantity <= InventoryItem.reorder_point)
+    if not include_inactive:
+        query = query.filter(InventoryItem.is_active == True)
     
     items = query.all()
     return items
+
+
+@router.put("/items/{item_id}", response_model=InventoryItemResponse)
+async def update_inventory_item(
+    item_id: int,
+    item_update: InventoryItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update an inventory item"""
+    item = db.query(InventoryItem).filter(InventoryItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventario no encontrado")
+
+    update_data = item_update.model_dump(exclude_unset=True)
+    if "warehouse_id" in update_data:
+        warehouse = db.query(Warehouse).filter(Warehouse.id == update_data["warehouse_id"]).first()
+        if not warehouse:
+            raise HTTPException(status_code=404, detail="Bodega no encontrada")
+    if "product_id" in update_data:
+        product = db.query(Product).filter(Product.id == update_data["product_id"]).first()
+        if not product:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    for field, value in update_data.items():
+        setattr(item, field, value)
+
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.patch("/items/{item_id}/status", response_model=InventoryItemResponse)
+async def update_inventory_item_status(
+    item_id: int,
+    is_active: bool,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Enable or disable an inventory item"""
+    item = db.query(InventoryItem).filter(InventoryItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventario no encontrado")
+
+    item.is_active = is_active
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 @router.get("/forecast")

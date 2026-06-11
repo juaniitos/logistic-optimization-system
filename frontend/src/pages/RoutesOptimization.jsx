@@ -1,6 +1,6 @@
 import { 
   Card, Button, Select, InputNumber, message, Tabs, Table, 
-  Row, Col, Statistic, Tag, Space, Spin, Divider, Progress, Modal 
+  Row, Col, Statistic, Tag, Space, Spin, Divider, Progress, Modal, Empty, Alert 
 } from 'antd'
 import { useState, useEffect } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
@@ -9,17 +9,23 @@ import {
   RocketOutlined, SwapOutlined, CarOutlined,
   EnvironmentOutlined, ClockCircleOutlined, 
   DollarOutlined, CloudOutlined, SaveOutlined, 
-  RiseOutlined, FullscreenOutlined, CloseOutlined
+  RiseOutlined, FullscreenOutlined, CloseOutlined,
+  ReloadOutlined
 } from '@ant-design/icons'
 import GoogleMapFullscreen from '../components/GoogleMapFullscreen'
 import GoogleMapSmall from '../components/GoogleMapSmall'
 import 'leaflet/dist/leaflet.css'
+import { apiUrl, getRoutes, optimizeSavedRoute } from '../services/api'
 
 const { Option } = Select
 
 function RoutesOptimization() {
   const [loading, setLoading] = useState(false)
+  const [savedRouteLoading, setSavedRouteLoading] = useState(false)
   const [warehouses, setWarehouses] = useState([])
+  const [savedRoutes, setSavedRoutes] = useState([])
+  const [selectedSavedRouteId, setSelectedSavedRouteId] = useState(null)
+  const [savedRouteOptimization, setSavedRouteOptimization] = useState(null)
   const [selectedAlgorithm, setSelectedAlgorithm] = useState('genetic-algorithm')
   const [numVehicles, setNumVehicles] = useState(3)
   const [populationSize, setPopulationSize] = useState(100)
@@ -37,15 +43,98 @@ function RoutesOptimization() {
 
   useEffect(() => {
     loadWarehouses()
+    loadSavedRoutes()
   }, [])
 
   const loadWarehouses = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/inventory/warehouses')
+      const response = await fetch(apiUrl('/inventory/warehouses'))
       const data = await response.json()
       setWarehouses(data)
     } catch (error) {
       message.error('Error al cargar bodegas')
+    }
+  }
+
+  const loadSavedRoutes = async () => {
+    try {
+      const data = await getRoutes()
+      setSavedRoutes(data)
+    } catch (error) {
+      message.error('Error al cargar rutas guardadas')
+    }
+  }
+
+  const parseRouteData = (route) => {
+    if (!route?.route_data) return null
+    try {
+      return JSON.parse(route.route_data)
+    } catch {
+      return null
+    }
+  }
+
+  const getOptimizableSavedRoutes = () => (
+    savedRoutes.filter(route => {
+      const routeData = parseRouteData(route)
+      return routeData?.ordered_stop_ids?.length > 1
+    })
+  )
+
+  const getSelectedSavedRoute = () => (
+    savedRoutes.find(route => route.id === selectedSavedRouteId) || null
+  )
+
+  const formatUsd = (value) => `$${Number(value || 0).toFixed(2)}`
+
+  const getWarehouseIndicesFromIds = (warehouseIds = []) => {
+    const indexById = new Map(warehouses.map((warehouse, index) => [warehouse.id, index]))
+    return warehouseIds.map(warehouseId => indexById.get(warehouseId)).filter(index => index !== undefined)
+  }
+
+  const buildSavedRouteMapResult = (route) => {
+    const routeData = parseRouteData(route)
+    if (!routeData) return null
+
+    const orderedStopIds = routeData.ordered_stop_ids || []
+    return {
+      routes: [
+        {
+          vehicle_id: 'Optimizada',
+          warehouse_indices: getWarehouseIndicesFromIds(orderedStopIds),
+          geometry: routeData.geometry || [],
+          distance: route.total_distance || routeData.optimization_summary?.optimized_distance_km || 0,
+          warehouse_names: routeData.ordered_stop_names || []
+        }
+      ]
+    }
+  }
+
+  const handleSavedRouteSelection = (routeId) => {
+    setSelectedSavedRouteId(routeId)
+    setSavedRouteOptimization(null)
+  }
+
+  const handleOptimizeSavedRoute = async () => {
+    if (!selectedSavedRouteId) {
+      message.warning('Seleccione una ruta guardada')
+      return
+    }
+
+    setSavedRouteLoading(true)
+    try {
+      const result = await optimizeSavedRoute(selectedSavedRouteId, { useRoadRouting: true })
+      setSavedRouteOptimization(result)
+      await loadSavedRoutes()
+      const saved = result.optimization?.distance_saved_km || 0
+      message.success(saved > 0
+        ? `Ruta optimizada: ${saved.toFixed(2)} km ahorrados`
+        : 'Ruta optimizada correctamente'
+      )
+    } catch (error) {
+      message.error(error.response?.data?.detail || 'Error al optimizar la ruta guardada')
+    } finally {
+      setSavedRouteLoading(false)
     }
   }
 
@@ -58,7 +147,7 @@ function RoutesOptimization() {
       let body = {}
 
       if (selectedAlgorithm === 'genetic-algorithm') {
-        url = 'http://localhost:8000/api/analytics/optimize/genetic-algorithm'
+        url = apiUrl('/analytics/optimize/genetic-algorithm')
         body = {
           num_vehicles: numVehicles,
           population_size: populationSize,
@@ -66,14 +155,14 @@ function RoutesOptimization() {
           use_road_routing: useRoadRouting
         }
       } else if (selectedAlgorithm === 'simulated-annealing') {
-        url = 'http://localhost:8000/api/analytics/optimize/simulated-annealing'
+        url = apiUrl('/analytics/optimize/simulated-annealing')
         body = {
           initial_temperature: initialTemp,
           cooling_rate: coolingRate,
           use_road_routing: useRoadRouting
         }
       } else if (selectedAlgorithm === 'two-opt') {
-        url = 'http://localhost:8000/api/analytics/optimize/two-opt'
+        url = apiUrl('/analytics/optimize/two-opt')
         body = {
           max_iterations: maxIterations,
           use_road_routing: useRoadRouting
@@ -113,7 +202,7 @@ function RoutesOptimization() {
     setLoading(true)
     try {
       const response = await fetch(
-        `http://localhost:8000/api/analytics/optimize/compare?num_vehicles=${numVehicles}`
+        apiUrl(`/analytics/optimize/compare?num_vehicles=${numVehicles}`)
       )
       const data = await response.json()
       setComparisonResults(data)
@@ -711,10 +800,477 @@ function RoutesOptimization() {
     return <Table columns={columns} dataSource={data} pagination={false} />
   }
 
+  const renderSavedRouteOptimization = () => {
+    const selectedRoute = savedRouteOptimization?.route || getSelectedSavedRoute()
+    const routeData = parseRouteData(selectedRoute)
+    const optimization = savedRouteOptimization?.optimization || routeData?.optimization_summary
+    const mapResult = buildSavedRouteMapResult(selectedRoute)
+
+    if (!selectedRoute || !routeData) {
+      return (
+        <Card>
+          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
+            <ThunderboltOutlined style={{ fontSize: 64, marginBottom: 20 }} />
+            <p>Selecciona una ruta guardada para ver su mapa y optimizarla antes del despacho</p>
+          </div>
+        </Card>
+      )
+    }
+
+    const originalStops = savedRouteOptimization?.optimization?.original_stop_names
+      || routeData.original_ordered_stop_names
+      || routeData.ordered_stop_names
+      || []
+    const optimizedStops = savedRouteOptimization?.optimization?.optimized_stop_names
+      || routeData.ordered_stop_names
+      || []
+
+    const originalDistance = optimization?.original_distance_km || selectedRoute.total_distance || 0
+    const optimizedDistance = optimization?.optimized_distance_km || selectedRoute.total_distance || 0
+    const savedDistance = optimization?.distance_saved_km || 0
+    const savedPercent = optimization?.distance_saved_percent || 0
+    const originalMetrics = optimization?.original_metrics
+    const optimizedMetrics = optimization?.optimized_metrics
+    const savings = optimizedMetrics?.savings
+    const originalMoney = originalMetrics?.monetary
+    const optimizedMoney = optimizedMetrics?.monetary
+    const emissions = optimizedMetrics?.emissions
+    const usesRoadRouting = optimization?.use_road_routing ?? routeData.use_road_routing ?? true
+
+    const originalData = originalStops.map((name, index) => ({
+      key: `original-${index}`,
+      order: index + 1,
+      stop: name
+    }))
+    const optimizedData = optimizedStops.map((name, index) => ({
+      key: `optimized-${index}`,
+      order: index + 1,
+      stop: name
+    }))
+    const stopColumns = [
+      { title: '#', dataIndex: 'order', key: 'order', width: 60 },
+      { title: 'Parada', dataIndex: 'stop', key: 'stop' }
+    ]
+
+    return (
+      <>
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic title="Distancia original" value={originalDistance} suffix="km" precision={2} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic
+                title="Distancia optimizada"
+                value={optimizedDistance}
+                suffix="km"
+                precision={2}
+                valueStyle={{ color: '#1890ff' }}
+              />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic
+                title="Ahorro"
+                value={savedDistance}
+                suffix="km"
+                precision={2}
+                valueStyle={{ color: '#52c41a' }}
+              />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic
+                title="Mejora"
+                value={savedPercent}
+                suffix="%"
+                precision={2}
+                valueStyle={{ color: '#52c41a' }}
+              />
+            </Card>
+          </Col>
+        </Row>
+
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Tag color={usesRoadRouting ? 'blue' : 'default'}>Rutas por carreteras reales</Tag>
+          {optimizedMoney && (
+            <Tag color="green">Costo total optimizado: {formatUsd(optimizedMoney.total_operational_cost_usd)}</Tag>
+          )}
+          {savings && (
+            <Tag color="gold">Ahorro total: {formatUsd(savings.total_saved_usd)}</Tag>
+          )}
+        </Space>
+
+        {optimizedMetrics && savedDistance <= 0 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="La ruta ya coincide con el mejor orden encontrado"
+            description="Por eso los valores de antes y optimizado son iguales, y el ahorro real debe mostrarse en cero."
+          />
+        )}
+
+        {optimizedMetrics && (
+          <>
+            <Divider orientation="left">Consumo y operación</Divider>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Tiempo estimado"
+                    value={optimizedMetrics.time?.total_hours || 0}
+                    suffix="h"
+                    precision={2}
+                    prefix={<ClockCircleOutlined />}
+                    valueStyle={{ color: '#1890ff' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Paradas: {optimizedMetrics.time?.num_stops || 0}
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Combustible"
+                    value={optimizedMetrics.fuel?.fuel_liters || 0}
+                    suffix="L"
+                    precision={2}
+                    valueStyle={{ color: '#faad14' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Antes: {Number(originalMetrics?.fuel?.fuel_liters || 0).toFixed(2)} L
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Costo combustible"
+                    value={optimizedMetrics.fuel?.fuel_cost_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Antes: {formatUsd(originalMetrics?.fuel?.fuel_cost_usd)}
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Emisiones CO₂"
+                    value={emissions?.total_co2_kg || 0}
+                    suffix="kg"
+                    precision={2}
+                    prefix={<CloudOutlined />}
+                    valueStyle={{ color: '#f5222d' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Nivel: {emissions?.pollution_level || '-'}
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          </>
+        )}
+
+        {optimizedMoney && (
+          <>
+            <Divider orientation="left">Monetización del algoritmo</Divider>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Costo operativo total"
+                    value={optimizedMoney.total_operational_cost_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#1890ff' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Antes: {formatUsd(originalMoney?.total_operational_cost_usd)}
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Valor del tiempo"
+                    value={optimizedMoney.time_cost_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#722ed1' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Antes: {formatUsd(originalMoney?.time_cost_usd)}
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Mantenimiento"
+                    value={optimizedMoney.maintenance_cost_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#fa8c16' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Antes: {formatUsd(originalMoney?.maintenance_cost_usd)}
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Costo ambiental"
+                    value={optimizedMoney.environmental_cost_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#13c2c2' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Antes: {formatUsd(originalMoney?.environmental_cost_usd)}
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          </>
+        )}
+
+        {emissions && (
+          <>
+            <Divider orientation="left">Contaminación y medio ambiente</Divider>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="CO₂ emitido"
+                    value={emissions.total_co2_kg || 0}
+                    suffix="kg"
+                    precision={2}
+                    prefix={<CloudOutlined />}
+                    valueStyle={{ color: '#f5222d' }}
+                  />
+                  <Progress percent={Math.max(0, Math.min(emissions.pollution_percentage || 0, 100))} showInfo={false} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="CO₂ por km"
+                    value={emissions.co2_per_km || 0}
+                    suffix="kg/km"
+                    precision={2}
+                    valueStyle={{ color: '#fa541c' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Nivel: {emissions.pollution_level || '-'}
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="CO₂ evitado"
+                    value={savings?.co2_saved_kg || 0}
+                    suffix="kg"
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <Progress percent={Math.max(0, Math.min(savings?.co2_saved_percent || 0, 100))} showInfo={false} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Valor ambiental ahorrado"
+                    value={savings?.environmental_saved_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    Carbono: {formatUsd(optimizedMoney?.carbon_cost_per_kg)}/kg
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          </>
+        )}
+
+        {savings && (
+          <>
+            <Divider orientation="left">Ahorros calculados</Divider>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Ahorro total"
+                    value={savings.total_saved_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <Progress percent={Math.max(0, Math.min(savedPercent || 0, 100))} showInfo={false} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Costo ahorrado"
+                    value={savings.cost_saved_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <Progress percent={Math.max(0, Math.min(savings.cost_saved_percent || 0, 100))} showInfo={false} />
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Tiempo ahorrado"
+                    value={savings.time_saved_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    {Number(savings.time_saved_minutes || 0).toFixed(2)} min
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={12} md={6}>
+                <Card>
+                  <Statistic
+                    title="Mantenimiento ahorrado"
+                    value={savings.maintenance_saved_usd || 0}
+                    prefix={<DollarOutlined />}
+                    precision={2}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                    {Number(savings.fuel_saved_liters || 0).toFixed(2)} L menos
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          </>
+        )}
+
+        <Card
+          title={`🗺️ Mapa de ruta guardada: ${selectedRoute.route_name || `Ruta #${selectedRoute.id}`}`}
+          style={{ marginBottom: 16 }}
+        >
+          {mapResult ? (
+            <GoogleMapSmall warehouses={warehouses} routeResult={mapResult} height="460px" />
+          ) : (
+            <Empty description="No hay datos suficientes para dibujar el mapa" />
+          )}
+        </Card>
+
+        <Row gutter={16}>
+          <Col xs={24} md={12}>
+            <Card title="Orden original">
+              <Table columns={stopColumns} dataSource={originalData} pagination={false} size="small" />
+            </Card>
+          </Col>
+          <Col xs={24} md={12}>
+            <Card
+              title={
+                <Space>
+                  Orden optimizado
+                  {routeData.optimized_at && <Tag color="green">Optimizada</Tag>}
+                </Space>
+              }
+            >
+              <Table columns={stopColumns} dataSource={optimizedData} pagination={false} size="small" />
+            </Card>
+          </Col>
+        </Row>
+      </>
+    )
+  }
+
   return (
     <div>
       <h1>🗺️ Optimización de Rutas</h1>
       <p>Encuentra las rutas más eficientes usando algoritmos avanzados de optimización</p>
+
+      <Card
+        title="Ruta guardada antes de salida"
+        style={{ marginTop: 24, marginBottom: 24 }}
+        extra={
+          <Button icon={<ReloadOutlined />} onClick={loadSavedRoutes}>
+            Actualizar
+          </Button>
+        }
+      >
+        <Row gutter={[16, 16]} align="bottom">
+          <Col xs={24} md={14}>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>
+              Ruta guardada
+            </label>
+            <Select
+              value={selectedSavedRouteId}
+              onChange={handleSavedRouteSelection}
+              placeholder="Seleccione una ruta creada o asignada"
+              showSearch
+              optionFilterProp="label"
+              style={{ width: '100%' }}
+              size="large"
+            >
+              {getOptimizableSavedRoutes().map(route => {
+                const routeData = parseRouteData(route)
+                const label = route.route_name || `Ruta #${route.id}`
+                return (
+                  <Option key={route.id} value={route.id} label={label}>
+                    <Space direction="vertical" size={0}>
+                      <span>{label}</span>
+                      <small style={{ color: '#888' }}>
+                        {routeData?.ordered_stop_names?.length || 0} paradas
+                        {route.total_distance ? ` · ${route.total_distance.toFixed(2)} km` : ''}
+                      </small>
+                    </Space>
+                  </Option>
+                )
+              })}
+            </Select>
+          </Col>
+          <Col xs={24} md={10}>
+            <Button
+              type="primary"
+              size="large"
+              block
+              onClick={handleOptimizeSavedRoute}
+              loading={savedRouteLoading}
+              icon={<ThunderboltOutlined />}
+              disabled={!selectedSavedRouteId}
+            >
+              Optimizar antes de salida
+            </Button>
+          </Col>
+        </Row>
+
+        <div style={{ marginTop: 24 }}>
+          {savedRouteLoading ? (
+            <div style={{ textAlign: 'center', padding: 50 }}>
+              <Spin size="large" />
+              <p style={{ marginTop: 20 }}>Optimizando ruta guardada...</p>
+            </div>
+          ) : (
+            renderSavedRouteOptimization()
+          )}
+        </div>
+      </Card>
 
       <Row gutter={[16, 16]} style={{ marginTop: 24 }}>
         {/* Panel de Configuración */}
@@ -752,22 +1308,18 @@ function RoutesOptimization() {
                   Tipo de Ruta
                 </label>
                 <Select
-                  value={useRoadRouting}
+                  value={true}
                   onChange={setUseRoadRouting}
                   style={{ width: '100%' }}
                   size="large"
+                  disabled
                 >
                   <Option value={true}>
                     🛣️ Rutas por Carreteras (Real)
                   </Option>
-                  <Option value={false}>
-                    📏 Línea Recta (Haversine)
-                  </Option>
                 </Select>
                 <div style={{ marginTop: 8, fontSize: '12px', color: '#888' }}>
-                  {useRoadRouting 
-                    ? 'Usa OSRM para calcular rutas reales por carreteras' 
-                    : 'Calcula distancia directa entre puntos'}
+                  Usa OSRM para calcular rutas reales por carreteras
                 </div>
               </div>
 
@@ -797,6 +1349,7 @@ function RoutesOptimization() {
                       max={500}
                       value={populationSize}
                       onChange={setPopulationSize}
+                      disabled
                       style={{ width: '100%' }}
                     />
                   </div>
@@ -809,6 +1362,7 @@ function RoutesOptimization() {
                       max={1000}
                       value={generations}
                       onChange={setGenerations}
+                      disabled
                       style={{ width: '100%' }}
                     />
                   </div>
@@ -1012,6 +1566,7 @@ function RoutesOptimization() {
                 </Card>
               )}
             </Tabs.TabPane>
+
           </Tabs>
         </Col>
       </Row>

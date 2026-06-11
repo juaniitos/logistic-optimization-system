@@ -7,6 +7,7 @@ when the database is empty, and creates the admin user only if it does not exist
 import os
 from pathlib import Path
 
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 os.chdir(Path(__file__).resolve().parent)
@@ -22,6 +23,30 @@ from seed_data import (
     seed_vehicles,
     seed_warehouses,
 )
+
+
+def ensure_demo_columns() -> None:
+    inspector = inspect(engine)
+    table_columns = {
+        table_name: {column["name"] for column in inspector.get_columns(table_name)}
+        for table_name in ["inventory_items", "route_assignments"]
+        if inspector.has_table(table_name)
+    }
+
+    with engine.begin() as connection:
+        inventory_columns = table_columns.get("inventory_items", set())
+        if "is_active" not in inventory_columns:
+            connection.execute(text("ALTER TABLE inventory_items ADD COLUMN is_active BOOLEAN DEFAULT TRUE"))
+            connection.execute(text("UPDATE inventory_items SET is_active = TRUE WHERE is_active IS NULL"))
+
+        assignment_columns = table_columns.get("route_assignments", set())
+        if "inventory_item_id" not in assignment_columns:
+            connection.execute(text("ALTER TABLE route_assignments ADD COLUMN inventory_item_id INTEGER"))
+        if "inventory_quantity" not in assignment_columns:
+            connection.execute(text("ALTER TABLE route_assignments ADD COLUMN inventory_quantity INTEGER"))
+        if "inventory_dispatched" not in assignment_columns:
+            connection.execute(text("ALTER TABLE route_assignments ADD COLUMN inventory_dispatched BOOLEAN DEFAULT FALSE"))
+            connection.execute(text("UPDATE route_assignments SET inventory_dispatched = FALSE WHERE inventory_dispatched IS NULL"))
 
 
 def ensure_admin_user(db: Session) -> None:
@@ -177,6 +202,7 @@ def seed_demo_drivers_if_empty(db: Session) -> None:
 
 def main() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_demo_columns()
     db = SessionLocal()
     try:
         seed_demo_data_if_empty(db)

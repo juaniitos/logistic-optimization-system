@@ -536,6 +536,7 @@ function RoutesOptimization() {
                       max={500} 
                       value={populationSize}
                       onChange={setPopulationSize}
+                      disabled
                       style={{ width: '100%', marginTop: 8 }}
                     />
                   </div>
@@ -546,6 +547,7 @@ function RoutesOptimization() {
                       max={1000} 
                       value={generations}
                       onChange={setGenerations}
+                      disabled
                       style={{ width: '100%', marginTop: 8 }}
                     />
                   </div>

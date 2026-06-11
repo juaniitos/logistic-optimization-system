@@ -21,6 +21,9 @@ class RouteMetricsCalculator:
     FUEL_CONSUMPTION_PER_KM = 0.08  # litros por km
     FUEL_COST_PER_LITER = 2.5  # USD por litro
     TIME_PER_STOP_MINUTES = 15  # Tiempo promedio por parada
+    OPERATION_COST_PER_HOUR = 8.0  # USD por hora operativa
+    MAINTENANCE_COST_PER_KM = 0.18  # USD por km recorrido
+    CARBON_COST_PER_KG = 0.05  # USD por kg CO2 estimado
     
     @staticmethod
     def calculate_emissions(distance_km: float) -> Dict[str, float]:
@@ -97,6 +100,32 @@ class RouteMetricsCalculator:
             "fuel_consumption_per_km": RouteMetricsCalculator.FUEL_CONSUMPTION_PER_KM,
             "fuel_price_per_liter": RouteMetricsCalculator.FUEL_COST_PER_LITER
         }
+
+    @staticmethod
+    def calculate_monetary_value(distance_km: float, num_stops: int) -> Dict[str, float]:
+        """
+        Monetiza las variables operativas de la ruta en USD.
+        """
+        fuel = RouteMetricsCalculator.calculate_fuel_cost(distance_km)
+        time = RouteMetricsCalculator.calculate_time(distance_km, num_stops)
+        emissions = RouteMetricsCalculator.calculate_emissions(distance_km)
+
+        fuel_cost = fuel["fuel_cost_usd"]
+        time_cost = time["total_hours"] * RouteMetricsCalculator.OPERATION_COST_PER_HOUR
+        maintenance_cost = distance_km * RouteMetricsCalculator.MAINTENANCE_COST_PER_KM
+        environmental_cost = emissions["total_co2_kg"] * RouteMetricsCalculator.CARBON_COST_PER_KG
+        total_cost = fuel_cost + time_cost + maintenance_cost + environmental_cost
+
+        return {
+            "fuel_cost_usd": round(fuel_cost, 2),
+            "time_cost_usd": round(time_cost, 2),
+            "maintenance_cost_usd": round(maintenance_cost, 2),
+            "environmental_cost_usd": round(environmental_cost, 2),
+            "total_operational_cost_usd": round(total_cost, 2),
+            "operation_cost_per_hour": RouteMetricsCalculator.OPERATION_COST_PER_HOUR,
+            "maintenance_cost_per_km": RouteMetricsCalculator.MAINTENANCE_COST_PER_KM,
+            "carbon_cost_per_kg": RouteMetricsCalculator.CARBON_COST_PER_KG
+        }
     
     @staticmethod
     def calculate_savings(
@@ -124,6 +153,8 @@ class RouteMetricsCalculator:
         
         opt_time = RouteMetricsCalculator.calculate_time(optimized_distance, num_stops)
         base_time = RouteMetricsCalculator.calculate_time(baseline_distance, num_stops)
+        opt_money = RouteMetricsCalculator.calculate_monetary_value(optimized_distance, num_stops)
+        base_money = RouteMetricsCalculator.calculate_monetary_value(baseline_distance, num_stops)
         
         # Calcular ahorros
         distance_saved_km = baseline_distance - optimized_distance
@@ -141,6 +172,10 @@ class RouteMetricsCalculator:
         time_saved_minutes = base_time["driving_time_minutes"] - opt_time["driving_time_minutes"]
         time_saved_hours = time_saved_minutes / 60
         time_saved_percent = (time_saved_minutes / base_time["driving_time_minutes"] * 100) if base_time["driving_time_minutes"] > 0 else 0
+        time_saved_usd = base_money["time_cost_usd"] - opt_money["time_cost_usd"]
+        maintenance_saved_usd = base_money["maintenance_cost_usd"] - opt_money["maintenance_cost_usd"]
+        environmental_saved_usd = base_money["environmental_cost_usd"] - opt_money["environmental_cost_usd"]
+        total_saved_usd = base_money["total_operational_cost_usd"] - opt_money["total_operational_cost_usd"]
         
         return {
             "distance_saved_km": round(distance_saved_km, 2),
@@ -153,7 +188,11 @@ class RouteMetricsCalculator:
             "cost_saved_percent": round(cost_saved_percent, 2),
             "time_saved_minutes": round(time_saved_minutes, 2),
             "time_saved_hours": round(time_saved_hours, 2),
-            "time_saved_percent": round(time_saved_percent, 2)
+            "time_saved_percent": round(time_saved_percent, 2),
+            "time_saved_usd": round(time_saved_usd, 2),
+            "maintenance_saved_usd": round(maintenance_saved_usd, 2),
+            "environmental_saved_usd": round(environmental_saved_usd, 2),
+            "total_saved_usd": round(total_saved_usd, 2)
         }
     
     @staticmethod
@@ -178,14 +217,16 @@ class RouteMetricsCalculator:
             "num_stops": num_stops,
             "emissions": RouteMetricsCalculator.calculate_emissions(distance_km),
             "time": RouteMetricsCalculator.calculate_time(distance_km, num_stops),
-            "fuel": RouteMetricsCalculator.calculate_fuel_cost(distance_km)
+            "fuel": RouteMetricsCalculator.calculate_fuel_cost(distance_km),
+            "monetary": RouteMetricsCalculator.calculate_monetary_value(distance_km, num_stops)
         }
         
-        # Si hay baseline, calcular ahorros
-        if baseline_distance and baseline_distance > distance_km:
+        # Si hay baseline real, usarlo. Si no hay mejora, el ahorro debe ser 0.
+        if baseline_distance is not None:
+            effective_baseline = max(baseline_distance, distance_km)
             metrics["savings"] = RouteMetricsCalculator.calculate_savings(
                 distance_km,
-                baseline_distance,
+                effective_baseline,
                 num_stops
             )
         else:

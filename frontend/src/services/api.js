@@ -3,11 +3,24 @@ import axios from 'axios'
 // En producción usa la variable de entorno, en desarrollo usa localhost
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 
+export const apiUrl = (path = '') => {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${API_BASE_URL}${normalizedPath}`
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+})
+
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 // Dashboard
@@ -34,9 +47,38 @@ export const getRoutes = async () => {
   return response.data
 }
 
+export const createRoute = async (data) => {
+  const response = await apiClient.post('/routes/', data)
+  return response.data
+}
+
+export const optimizeSavedRoute = async (id, options = {}) => {
+  const response = await apiClient.post(`/routes/${id}/optimize`, null, {
+    params: {
+      use_road_routing: options.useRoadRouting ?? true,
+    },
+  })
+  return response.data
+}
+
 // Inventory
 export const getInventoryItems = async (params = {}) => {
   const response = await apiClient.get('/inventory/items', { params })
+  return response.data
+}
+
+export const createInventoryItem = async (data) => {
+  const response = await apiClient.post('/inventory/items', data)
+  return response.data
+}
+
+export const updateInventoryItem = async (id, data) => {
+  const response = await apiClient.put(`/inventory/items/${id}`, data)
+  return response.data
+}
+
+export const updateInventoryItemStatus = async (id, isActive) => {
+  const response = await apiClient.patch(`/inventory/items/${id}/status?is_active=${isActive}`)
   return response.data
 }
 

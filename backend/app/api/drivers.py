@@ -13,7 +13,7 @@ from app.models.schemas import (
     RouteAssignmentUpdate,
     RouteAssignmentResponse
 )
-from app.models.models import Driver, RouteAssignment, Route, Vehicle, User
+from app.models.models import Driver, InventoryItem, RouteAssignment, Route, Vehicle, User
 from app.utils.auth import get_current_user
 from datetime import datetime
 
@@ -216,6 +216,25 @@ async def create_route_assignment(
             status_code=400,
             detail="Esta ruta ya tiene una asignación activa"
         )
+
+    if assignment.inventory_item_id:
+        if not assignment.inventory_quantity or assignment.inventory_quantity <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Ingrese una cantidad válida para el inventario a despachar"
+            )
+
+        inventory_item = db.query(InventoryItem).filter(
+            InventoryItem.id == assignment.inventory_item_id,
+            InventoryItem.is_active == True
+        ).first()
+        if not inventory_item:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado o deshabilitado")
+        if assignment.inventory_quantity > inventory_item.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail="La cantidad a despachar supera el inventario disponible"
+            )
     
     assignment_data = assignment.model_dump()
     if not assignment_data.get("vehicle_id") and driver.assigned_vehicle_id:
@@ -284,6 +303,7 @@ async def update_assignment_status(
     if not assignment:
         raise HTTPException(status_code=404, detail="Asignación no encontrada")
     
+    previous_status = assignment.status
     assignment.status = new_status
     
     # Actualizar timestamps según el estado
@@ -291,6 +311,22 @@ async def update_assignment_status(
         assignment.started_at = datetime.utcnow()
         driver = db.query(Driver).filter(Driver.id == assignment.driver_id).first()
         route = db.query(Route).filter(Route.id == assignment.route_id).first()
+        if previous_status != "in_progress" and assignment.inventory_item_id and not assignment.inventory_dispatched:
+            inventory_item = db.query(InventoryItem).filter(
+                InventoryItem.id == assignment.inventory_item_id,
+                InventoryItem.is_active == True
+            ).first()
+            if not inventory_item:
+                raise HTTPException(status_code=404, detail="Inventario no encontrado o deshabilitado")
+            if not assignment.inventory_quantity or assignment.inventory_quantity <= 0:
+                raise HTTPException(status_code=400, detail="La asignación no tiene una cantidad válida")
+            if assignment.inventory_quantity > inventory_item.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No hay inventario suficiente para iniciar la ruta"
+                )
+            inventory_item.quantity -= assignment.inventory_quantity
+            assignment.inventory_dispatched = True
         if driver:
             driver.status = "on_route"
         if route:
@@ -300,6 +336,11 @@ async def update_assignment_status(
         # Liberar al transportista
         driver = db.query(Driver).filter(Driver.id == assignment.driver_id).first()
         route = db.query(Route).filter(Route.id == assignment.route_id).first()
+        if new_status == "cancelled" and assignment.inventory_item_id and assignment.inventory_dispatched:
+            inventory_item = db.query(InventoryItem).filter(InventoryItem.id == assignment.inventory_item_id).first()
+            if inventory_item and assignment.inventory_quantity:
+                inventory_item.quantity += assignment.inventory_quantity
+                assignment.inventory_dispatched = False
         if driver:
             driver.status = "available"
         if route:
@@ -328,6 +369,10 @@ async def delete_assignment(
         driver = db.query(Driver).filter(Driver.id == assignment.driver_id).first()
         if driver:
             driver.status = "available"
+        if assignment.inventory_item_id and assignment.inventory_dispatched:
+            inventory_item = db.query(InventoryItem).filter(InventoryItem.id == assignment.inventory_item_id).first()
+            if inventory_item and assignment.inventory_quantity:
+                inventory_item.quantity += assignment.inventory_quantity
     
     db.delete(assignment)
     db.commit()
