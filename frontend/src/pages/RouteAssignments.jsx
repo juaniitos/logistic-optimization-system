@@ -36,7 +36,7 @@ function RouteAssignments() {
     try {
       const [assignmentsData, driversData, routesData] = await Promise.all([
         getRouteAssignments(statusFilter ? { status: statusFilter } : {}),
-        getDrivers({ status: 'available' }),
+        getDrivers(),
         getRoutes()
       ])
       setAssignments(assignmentsData)
@@ -69,7 +69,12 @@ function RouteAssignments() {
   const handleStatusChange = async (id, newStatus) => {
     try {
       await updateAssignmentStatus(id, newStatus)
-      message.success('Estado actualizado')
+      const messages = {
+        in_progress: 'Ruta iniciada',
+        completed: 'Ruta completada',
+        cancelled: 'Ruta cancelada'
+      }
+      message.success(messages[newStatus] || 'Estado actualizado')
       loadData()
     } catch (error) {
       message.error('Error al actualizar estado')
@@ -337,7 +342,7 @@ function RouteAssignments() {
               onClick={handleCreate}
               disabled={getAvailableDrivers().length === 0}
             >
-              Nueva Asignación
+              Nueva Ruta
             </Button>
           </Space>
         }
@@ -360,7 +365,7 @@ function RouteAssignments() {
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           >
             <Button type="primary" onClick={handleCreate} disabled={getAvailableDrivers().length === 0}>
-              Crear Primera Asignación
+              Crear Primera Ruta
             </Button>
           </Empty>
         )}
@@ -394,7 +399,7 @@ function RouteAssignments() {
 
       {/* Modal de Nueva Asignación */}
       <Modal
-        title="Nueva Asignación de Ruta"
+        title="Nueva Ruta"
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
@@ -467,7 +472,7 @@ function RouteAssignments() {
                 Cancelar
               </Button>
               <Button type="primary" htmlType="submit">
-                Asignar Ruta
+                Crear Ruta
               </Button>
             </Space>
           </Form.Item>
@@ -478,5 +483,3 @@ function RouteAssignments() {
 }
 
 export default RouteAssignments
-
-
